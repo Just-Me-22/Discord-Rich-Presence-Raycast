@@ -13,28 +13,45 @@ export default async function Command() {
       stopBridge();
     }
 
-    const disabledVencordPlugin = disableVencordCustomRpc();
+    const vencordResult = disableVencordCustomRpc();
 
-    if (bridgeWasRunning && disabledVencordPlugin) {
+    if (bridgeWasRunning && vencordResult.changed) {
       await showHUD(
-        "🎮 Rich Presence stopped. Vencord CustomRPC disabled; restart Discord if it stays visible.",
+        "🎮 Rich Presence stopped and Vencord CustomRPC disabled. Restart Discord if it stays visible.",
       );
       return;
     }
 
-    if (bridgeWasRunning) {
-      await showHUD("🎮 Rich Presence stopped.");
-      return;
-    }
-
-    if (disabledVencordPlugin) {
+    if (vencordResult.changed) {
       await showHUD(
         "Vencord CustomRPC disabled. Restart Discord if the presence stays visible.",
       );
       return;
     }
 
-    await showHUD("No Vencord CustomRPC settings found to disable.");
+    if (bridgeWasRunning && vencordResult.foundPlugin) {
+      await showHUD(
+        "🎮 Rich Presence bridge stopped. Vencord CustomRPC was already disabled in settings.",
+      );
+      return;
+    }
+
+    if (bridgeWasRunning) {
+      await showHUD("🎮 Rich Presence bridge stopped.");
+      return;
+    }
+
+    if (vencordResult.foundPlugin && !vencordResult.wasEnabled) {
+      await showHUD("Vencord CustomRPC is already disabled in settings.");
+      return;
+    }
+
+    if (vencordResult.foundSettings && !vencordResult.foundPlugin) {
+      await showHUD("Vencord settings found, but CustomRPC is not configured.");
+      return;
+    }
+
+    await showHUD("Could not find Vencord CustomRPC settings to disable.");
   } catch (error) {
     await showToast({
       title: "Failed to stop Rich Presence",

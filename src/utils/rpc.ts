@@ -719,8 +719,16 @@ export function exportToVencord(config: RpcConfig): boolean {
  * settings in memory while Discord is running, so a Discord restart/reload
  * may still be required before Vencord itself observes the change.
  */
-export function disableVencordCustomRpc(): boolean {
+export interface VencordCustomRpcToggleResult {
+  foundSettings: boolean;
+  foundPlugin: boolean;
+  wasEnabled: boolean;
+  changed: boolean;
+}
+
+export function disableVencordCustomRpc(): VencordCustomRpcToggleResult {
   const paths = getVencordSettingsPaths();
+  let foundSettings = false;
 
   for (const settingsPath of paths) {
     let raw: string;
@@ -737,10 +745,15 @@ export function disableVencordCustomRpc(): boolean {
       continue;
     }
 
-    if (!settings.plugins) settings.plugins = {};
-    if (!settings.plugins.CustomRPC) settings.plugins.CustomRPC = {};
+    foundSettings = true;
 
-    settings.plugins.CustomRPC.enabled = false;
+    if (!settings.plugins) settings.plugins = {};
+    const customRpc = settings.plugins.CustomRPC;
+
+    if (!customRpc) continue;
+
+    const wasEnabled = customRpc.enabled !== false;
+    customRpc.enabled = false;
 
     try {
       fs.writeFileSync(
@@ -748,11 +761,21 @@ export function disableVencordCustomRpc(): boolean {
         JSON.stringify(settings, null, 2),
         "utf-8",
       );
-      return true;
+      return {
+        foundSettings: true,
+        foundPlugin: true,
+        wasEnabled,
+        changed: wasEnabled,
+      };
     } catch {
       continue;
     }
   }
 
-  return false;
+  return {
+    foundSettings,
+    foundPlugin: false,
+    wasEnabled: false,
+    changed: false,
+  };
 }
