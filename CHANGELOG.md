@@ -11,6 +11,6 @@
 - **Form Actions & Feedback**:
   - Non-destructive form actions to update presence with Toast notifications.
   - Friendly "Restart Discord" utility action for refreshing Vencord's in-memory state if needed.
-- **Commands**: 
-  - `Set Rich Presence` to configure and deploy a custom presence.
-  - `Stop Rich Presence` to disable Vencord's CustomRPC plugin and clear the Raycast live bridge.
+- **Commands**:
+  - `Set Vencord CustomRPC` to configure and deploy a custom presence.
+  - `Stop Vencord CustomRPC` to disable the CustomRPC plugin and automatically restart Discord.

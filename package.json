@@ -28,16 +28,16 @@
   "commands": [
     {
       "mode": "view",
-      "name": "set-rich-presence",
+      "name": "set-vencord-customrpc",
       "title": "Set Vencord CustomRPC",
       "description": "Configure your Vencord CustomRPC presence",
       "subtitle": "Vencord CustomRPC"
     },
     {
       "mode": "no-view",
-      "name": "stop-rich-presence",
+      "name": "stop-vencord-customrpc",
       "title": "Stop Vencord CustomRPC",
-      "description": "Disable Vencord CustomRPC and stop the current presence",
+      "description": "Disable Vencord CustomRPC and restart Discord",
       "subtitle": "Vencord CustomRPC"
     }
   ],

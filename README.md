@@ -20,10 +20,10 @@ Control and customize your Discord Rich Presence directly from Raycast.
 
 ## Getting Started
 
-1. Open the **Set Rich Presence** command.
+1. Open the **Set Vencord CustomRPC** command.
 2. Enter your **Application ID** or paste an existing one. If you have Vencord configured with CustomRPC, the fields will auto-fill from your existing settings.
 3. Configure your custom presence (App Name, Details, State, Images, Buttons).
-4. Hit `Cmd/Ctrl + Enter` to **Set Rich Presence**.
+4. Hit `Cmd/Ctrl + Enter` to **Set Vencord CustomRPC**.
 
 ### Presets
 
@@ -31,8 +31,8 @@ You can save your current configuration as a preset for the current App ID. Open
 
 ## Stopping Rich Presence
 
-Use the **Stop Rich Presence** command to stop the Raycast live bridge and set `plugins.CustomRPC.enabled` to `false` in Vencord's `settings.json`.
+Use the **Stop Vencord CustomRPC** command to disable the CustomRPC plugin in Vencord's `settings.json` and automatically restart Discord so the change takes effect immediately.
 
 ## Known Limitations
 
-- **Vencord In-Memory State**: Vencord caches its settings and plugin enabled state in-memory while Discord is running. Although this extension updates your live Discord presence immediately (via IPC bridge) and saves to your `settings.json`, Vencord's own settings UI and plugin state may not reflect these changes until Discord is restarted or reloaded.
+- **Vencord In-Memory State**: Vencord caches its settings and plugin enabled state in-memory while Discord is running. The **Stop** command automatically restarts Discord to apply the disabled state immediately. The **Set** command uses a live IPC bridge so your presence updates in real-time without needing a restart.
