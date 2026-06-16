@@ -37,7 +37,7 @@
       "mode": "no-view",
       "name": "stop-rich-presence",
       "title": "Stop Rich Presence",
-      "description": "Stop your current Vencord CustomRPC presence",
+      "description": "Disable Vencord CustomRPC and stop the current presence",
       "subtitle": "Discord Rich Presence"
     }
   ],

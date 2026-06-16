@@ -13,4 +13,4 @@
   - Friendly "Restart Discord" utility action for refreshing Vencord's in-memory state if needed.
 - **Commands**: 
   - `Set Rich Presence` to configure and deploy a custom presence.
-  - `Stop Rich Presence` to easily clear the current presence.
+  - `Stop Rich Presence` to disable Vencord's CustomRPC plugin and clear the Raycast live bridge.

@@ -359,6 +359,7 @@ export function deleteProfile(clientId: string): boolean {
   if (profiles[clientId]) {
     delete profiles[clientId];
     writeProfiles(profiles);
+
     return true;
   }
   return false;
@@ -666,6 +667,7 @@ export function exportToVencord(config: RpcConfig): boolean {
     const c = settings.plugins.CustomRPC;
 
     // Map our RpcConfig back to Vencord's field names
+    c.enabled = true;
     c.appID = config.clientId;
     c.appName = config.appName;
     c.details = config.details;
@@ -694,6 +696,51 @@ export function exportToVencord(config: RpcConfig): boolean {
     for (const key of Object.keys(c)) {
       if (c[key] === undefined) delete c[key];
     }
+
+    try {
+      fs.writeFileSync(
+        settingsPath,
+        JSON.stringify(settings, null, 2),
+        "utf-8",
+      );
+      return true;
+    } catch {
+      continue;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Disable Vencord's CustomRPC plugin in settings.json.
+ *
+ * This mirrors toggling the plugin off in Vencord's UI. Vencord keeps
+ * settings in memory while Discord is running, so a Discord restart/reload
+ * may still be required before Vencord itself observes the change.
+ */
+export function disableVencordCustomRpc(): boolean {
+  const paths = getVencordSettingsPaths();
+
+  for (const settingsPath of paths) {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(settingsPath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    let settings: VencordSettings;
+    try {
+      settings = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+
+    if (!settings.plugins) settings.plugins = {};
+    if (!settings.plugins.CustomRPC) settings.plugins.CustomRPC = {};
+
+    settings.plugins.CustomRPC.enabled = false;
 
     try {
       fs.writeFileSync(

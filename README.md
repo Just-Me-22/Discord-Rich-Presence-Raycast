@@ -9,7 +9,7 @@ Control and customize your Discord Rich Presence directly from Raycast.
 - **Live Updates**: Update your CustomRPC presence instantly through Raycast without restarting Discord.
 - **Vencord Integration**: Seamlessly reads from and writes to your current CustomRPC settings inside Vencord (supports Stable, PTB, and Canary).
 - **Profiles & Presets**: Keep track of your last-used profiles per Application ID and save reusable configurations to load instantly.
-- **Easy Toggle**: Set or Stop your Rich Presence effortlessly with built-in commands.
+- **Easy Toggle**: Set your Rich Presence or disable Vencord's CustomRPC plugin from Raycast.
 
 ## Prerequisites
 
@@ -29,6 +29,10 @@ Control and customize your Discord Rich Presence directly from Raycast.
 
 You can save your current configuration as a preset for the current App ID. Open the action menu and select **Save as Preset**. Later, you can load it using the **Load Preset** dropdown menu.
 
+## Stopping Rich Presence
+
+Use the **Stop Rich Presence** command to stop the Raycast live bridge and set `plugins.CustomRPC.enabled` to `false` in Vencord's `settings.json`.
+
 ## Known Limitations
 
-- **Vencord In-Memory State**: Vencord caches its settings in-memory while Discord is running. Although this extension updates your live Discord presence immediately (via IPC bridge) and saves to your `settings.json`, Vencord's own settings UI will not reflect these changes until Discord is restarted.
+- **Vencord In-Memory State**: Vencord caches its settings and plugin enabled state in-memory while Discord is running. Although this extension updates your live Discord presence immediately (via IPC bridge) and saves to your `settings.json`, Vencord's own settings UI and plugin state may not reflect these changes until Discord is restarted or reloaded.
