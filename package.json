@@ -29,16 +29,16 @@
     {
       "mode": "view",
       "name": "set-rich-presence",
-      "title": "Set Rich Presence",
+      "title": "Set Vencord CustomRPC",
       "description": "Configure your Vencord CustomRPC presence",
-      "subtitle": "Discord Rich Presence"
+      "subtitle": "Vencord CustomRPC"
     },
     {
       "mode": "no-view",
       "name": "stop-rich-presence",
-      "title": "Stop Rich Presence",
+      "title": "Stop Vencord CustomRPC",
       "description": "Disable Vencord CustomRPC and stop the current presence",
-      "subtitle": "Discord Rich Presence"
+      "subtitle": "Vencord CustomRPC"
     }
   ],
   "preferences": [
