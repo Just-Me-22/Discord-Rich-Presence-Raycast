@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { restartRunningDiscordClients } from "./utils/discord";
 import {
   ActivityType,
+  applyConfigLive,
   deletePreset,
   exportToVencord,
   getAllProfiles,
@@ -17,15 +18,12 @@ import {
   getPresetsForApp,
   importFirstFromVencord,
   importFromVencord,
-  isBridgeRunning,
   loadPreset,
   loadProfile,
   RpcConfig,
   savePreset,
   saveProfile,
-  spawnBridge,
   TimestampMode,
-  writeBridgeConfig,
 } from "./utils/rpc";
 
 interface Preferences {
@@ -300,17 +298,30 @@ export default function Command() {
     const synced = exportToVencord(config);
 
     try {
-      let pid: number | null = null;
+      if (synced) {
+        const restarted = await restartRunningDiscordClients();
+        if (restarted.length > 0) {
+          await showToast({
+            title: "Discord Rich Presence updated",
+            message: `Vencord settings saved. Restarted ${restarted.join(", ")}.`,
+            style: Toast.Style.Success,
+          });
+          return;
+        }
 
-      if (isBridgeRunning()) {
-        writeBridgeConfig(config);
-      } else {
-        pid = spawnBridge(config);
+        await showToast({
+          title: "Rich Presence saved",
+          message: "Vencord settings saved. Discord was not running.",
+          style: Toast.Style.Success,
+        });
+        return;
       }
 
-      if (pid || isBridgeRunning()) {
+      const liveResult = await applyConfigLive(config);
+
+      if (liveResult.live) {
         const message = synced
-          ? "Live activity updated. Vencord UI updates after Discord reload."
+          ? "Live activity updated. Vencord settings were saved for next launch."
           : "Live activity updated. Vencord settings file was not found.";
         await showToast({
           title: "Discord Rich Presence updated",
@@ -320,7 +331,9 @@ export default function Command() {
       } else {
         await showToast({
           title: "Rich Presence saved",
-          message: "Could not confirm the live bridge is running.",
+          message:
+            liveResult.error ??
+            "Could not confirm the live Discord RPC bridge is connected.",
           style: Toast.Style.Success,
         });
       }

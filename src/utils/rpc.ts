@@ -16,10 +16,17 @@ export const BRIDGE_SCRIPT_FILE = path.join(
   "discord-rpc-raycast-bridge.js",
 );
 export const PID_FILE = path.join(os.tmpdir(), "discord-rpc-raycast.pid");
+export const STATUS_FILE = path.join(
+  os.tmpdir(),
+  "discord-rpc-raycast-status.json",
+);
 
 const DATA_DIR = path.join(os.homedir(), ".raycast-discord-rpc");
 const PROFILES_FILE = path.join(DATA_DIR, "profiles.json");
 const PRESETS_FILE = path.join(DATA_DIR, "presets.json");
+const BRIDGE_READY_TIMEOUT_MS = 6000;
+const BRIDGE_STOP_TIMEOUT_MS = 3000;
+const BRIDGE_POLL_MS = 250;
 
 /**
  * Activity types matching Discord's ActivityType enum.
@@ -69,6 +76,89 @@ export interface RpcConfig {
   partyMaxSize?: number;
 }
 
+interface BridgeStatus {
+  pid?: number;
+  clientId?: string;
+  ready?: boolean;
+  lastAppliedAt?: number;
+  lastError?: string | null;
+  updatedAt?: number;
+}
+
+export interface BridgeApplyResult {
+  live: boolean;
+  started: boolean;
+  restarted: boolean;
+  error?: string;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readBridgePid(): number | null {
+  try {
+    const pid = Number(fs.readFileSync(PID_FILE, "utf-8"));
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function isPidRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeFileIfExists(filePath: string): void {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Already gone.
+  }
+}
+
+function readBridgeStatus(): BridgeStatus | null {
+  try {
+    if (!fs.existsSync(STATUS_FILE)) return null;
+    return JSON.parse(fs.readFileSync(STATUS_FILE, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+async function waitForBridgeReady(
+  clientId: string,
+  minAppliedAt: number,
+  timeoutMs = BRIDGE_READY_TIMEOUT_MS,
+): Promise<BridgeStatus | null> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus: BridgeStatus | null = null;
+
+  while (Date.now() < deadline) {
+    lastStatus = readBridgeStatus();
+    if (
+      lastStatus?.ready &&
+      lastStatus.clientId === clientId &&
+      (lastStatus.lastAppliedAt ?? 0) >= minAppliedAt
+    ) {
+      return lastStatus;
+    }
+
+    if (lastStatus?.lastError && !isBridgeRunning()) {
+      return lastStatus;
+    }
+
+    await wait(BRIDGE_POLL_MS);
+  }
+
+  return lastStatus;
+}
+
 /**
  * Generates the bridge script content that runs as a background process
  * to maintain a persistent Discord RPC connection.
@@ -76,67 +166,162 @@ export interface RpcConfig {
 function generateBridgeScript(
   configPath: string,
   stopSignalPath: string,
+  statusPath: string,
 ): string {
-  // Resolve the discord-rpc module relative to the extension's node_modules
-  const extensionDir = path.resolve(__dirname, "..");
-  const rpcModulePath = path.join(extensionDir, "node_modules", "discord-rpc");
-
   return `
-const path = require("path");
 const fs = require("fs");
-
-// Load discord-rpc from the extension's node_modules
-const { Client } = require(${JSON.stringify(rpcModulePath)});
+const net = require("net");
+const os = require("os");
+const path = require("path");
 
 const CONFIG_PATH = ${JSON.stringify(configPath)};
 const STOP_PATH = ${JSON.stringify(stopSignalPath)};
+const STATUS_PATH = ${JSON.stringify(statusPath)};
+const OPCODE_HANDSHAKE = 0;
+const OPCODE_FRAME = 1;
+const OPCODE_CLOSE = 2;
+const OPCODE_PING = 3;
+const OPCODE_PONG = 4;
+const CONNECT_TIMEOUT_MS = 1500;
 
-function readConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    console.error("Config file not found:", CONFIG_PATH);
-    process.exit(1);
-  }
-  return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+let client = null;
+let ready = false;
+let activeClientId = null;
+let lastConfigText = "";
+let reconnecting = false;
+
+function readConfigText() {
+  return fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, "utf-8") : "";
 }
 
-const initialConfig = readConfig();
-const client = new Client({ transport: "ipc" });
+function readConfig() {
+  const text = readConfigText();
+  if (!text) throw new Error("Config file not found: " + CONFIG_PATH);
+  return JSON.parse(text);
+}
 
-let ready = false;
-let lastConfigText = "";
+function writeStatus(update) {
+  let current = {};
+  try {
+    if (fs.existsSync(STATUS_PATH)) {
+      current = JSON.parse(fs.readFileSync(STATUS_PATH, "utf-8"));
+    }
+  } catch {
+    current = {};
+  }
+
+  fs.writeFileSync(
+    STATUS_PATH,
+    JSON.stringify(
+      {
+        ...current,
+        pid: process.pid,
+        clientId: activeClientId,
+        ready,
+        ...update,
+        updatedAt: Date.now(),
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+}
+
+function getIpcPath(index) {
+  if (process.platform === "win32") {
+    return "\\\\\\\\?\\\\pipe\\\\discord-ipc-" + index;
+  }
+
+  const baseDirs = [
+    process.env.XDG_RUNTIME_DIR,
+    process.env.TMPDIR,
+    process.env.TMP,
+    process.env.TEMP,
+    "/tmp",
+  ].filter(Boolean);
+
+  return path.join(baseDirs[0] || os.tmpdir(), "discord-ipc-" + index);
+}
+
+function encodePacket(opcode, payload) {
+  const data = Buffer.from(JSON.stringify(payload));
+  const header = Buffer.alloc(8);
+  header.writeInt32LE(opcode, 0);
+  header.writeInt32LE(data.length, 4);
+  return Buffer.concat([header, data]);
+}
+
+function decodePackets(buffer) {
+  const packets = [];
+  let offset = 0;
+
+  while (buffer.length - offset >= 8) {
+    const opcode = buffer.readInt32LE(offset);
+    const length = buffer.readInt32LE(offset + 4);
+    if (buffer.length - offset - 8 < length) break;
+
+    const body = buffer.slice(offset + 8, offset + 8 + length).toString("utf-8");
+    let payload = null;
+    try {
+      payload = body ? JSON.parse(body) : null;
+    } catch {
+      payload = null;
+    }
+
+    packets.push({ opcode, payload });
+    offset += 8 + length;
+  }
+
+  return {
+    packets,
+    rest: buffer.slice(offset),
+  };
+}
+
+function normalizeTimestamp(value) {
+  if (!value) return undefined;
+  return value > 9999999999 ? Math.floor(value / 1000) : value;
+}
 
 function buildActivity(config) {
   const activity = {
+    type: config.activityType,
+    url: config.activityType === 1 ? config.streamLink || undefined : undefined,
     details: config.details || undefined,
     state: config.state || undefined,
-    startTimestamp: config.startTimestamp || undefined,
-    endTimestamp: config.endTimestamp || undefined,
-    largeImageKey: config.largeImageKey || undefined,
-    largeImageText: config.largeImageText || undefined,
-    smallImageKey: config.smallImageKey || undefined,
-    smallImageText: config.smallImageText || undefined,
     instance: true,
   };
 
-  // Add buttons if configured
+  const timestamps = {};
+  if (config.startTimestamp) timestamps.start = normalizeTimestamp(config.startTimestamp);
+  if (config.endTimestamp) timestamps.end = normalizeTimestamp(config.endTimestamp);
+  if (Object.keys(timestamps).length > 0) activity.timestamps = timestamps;
+
+  const assets = {};
+  if (config.largeImageKey) assets.large_image = config.largeImageKey;
+  if (config.largeImageText) assets.large_text = config.largeImageText;
+  if (config.smallImageKey) assets.small_image = config.smallImageKey;
+  if (config.smallImageText) assets.small_text = config.smallImageText;
+  if (Object.keys(assets).length > 0) activity.assets = assets;
+
   const buttons = [];
-  if (config.buttonOneText) {
-    buttons.push({ label: config.buttonOneText, url: config.buttonOneUrl || "" });
+  if (config.buttonOneText && config.buttonOneUrl) {
+    buttons.push({ label: config.buttonOneText, url: config.buttonOneUrl });
   }
-  if (config.buttonTwoText) {
-    buttons.push({ label: config.buttonTwoText, url: config.buttonTwoUrl || "" });
+  if (config.buttonTwoText && config.buttonTwoUrl) {
+    buttons.push({ label: config.buttonTwoText, url: config.buttonTwoUrl });
   }
   if (buttons.length > 0) {
     activity.buttons = buttons;
   }
 
-  // Add party info if configured
   if (config.partySize && config.partyMaxSize) {
-    activity.partySize = config.partySize;
-    activity.partyMax = config.partyMaxSize;
+    activity.party = {
+      size: [config.partySize, config.partyMaxSize],
+    };
   }
 
-  // Clean undefined values
   Object.keys(activity).forEach((key) => {
     if (activity[key] === undefined) delete activity[key];
   });
@@ -144,14 +329,226 @@ function buildActivity(config) {
   return activity;
 }
 
-async function applyConfig(config) {
-  if (!ready) return;
-  await client.setActivity(buildActivity(config));
-  console.log("Discord Rich Presence updated successfully.");
+class DiscordIpcClient {
+  constructor() {
+    this.socket = null;
+    this.buffer = Buffer.alloc(0);
+    this.pending = new Map();
+    this.readyResolver = null;
+    this.readyRejecter = null;
+  }
+
+  async connect(clientId) {
+    this.socket = await this.connectSocket();
+    this.socket.on("data", (data) => this.handleData(data));
+    this.socket.on("close", () => this.rejectAll(new Error("Discord IPC connection closed")));
+    this.socket.on("error", (err) => this.rejectAll(err));
+
+    const readyPromise = new Promise((resolve, reject) => {
+      this.readyResolver = resolve;
+      this.readyRejecter = reject;
+    });
+
+    this.send(OPCODE_HANDSHAKE, { v: 1, client_id: clientId });
+    await readyPromise;
+  }
+
+  connectSocket() {
+    const attempts = [];
+    for (let i = 0; i < 10; i += 1) {
+      attempts.push(this.tryConnectPath(getIpcPath(i)));
+    }
+
+    return Promise.any(attempts).catch(() => {
+      throw new Error("Could not connect to Discord IPC. Make sure Discord is running.");
+    });
+  }
+
+  tryConnectPath(ipcPath) {
+    return new Promise((resolve, reject) => {
+      const socket = net.createConnection(ipcPath);
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(new Error("Timed out connecting to " + ipcPath));
+      }, CONNECT_TIMEOUT_MS);
+
+      socket.once("connect", () => {
+        clearTimeout(timer);
+        resolve(socket);
+      });
+      socket.once("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  }
+
+  send(opcode, payload) {
+    if (!this.socket || this.socket.destroyed) {
+      throw new Error("Discord IPC socket is not connected");
+    }
+    this.socket.write(encodePacket(opcode, payload));
+  }
+
+  request(payload) {
+    const nonce =
+      Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const requestPayload = { ...payload, nonce };
+
+    return new Promise((resolve, reject) => {
+      this.pending.set(nonce, { resolve, reject });
+      try {
+        this.send(OPCODE_FRAME, requestPayload);
+      } catch (error) {
+        this.pending.delete(nonce);
+        reject(error);
+      }
+    });
+  }
+
+  async setActivity(activity) {
+    await this.request({
+      cmd: "SET_ACTIVITY",
+      args: {
+        pid: process.pid,
+        activity,
+      },
+    });
+  }
+
+  async clearActivity() {
+    await this.setActivity(null);
+  }
+
+  destroy() {
+    if (this.socket && !this.socket.destroyed) {
+      this.socket.end();
+      this.socket.destroy();
+    }
+    this.rejectAll(new Error("Discord IPC client destroyed"));
+  }
+
+  handleData(data) {
+    this.buffer = Buffer.concat([this.buffer, data]);
+    const decoded = decodePackets(this.buffer);
+    this.buffer = decoded.rest;
+
+    for (const packet of decoded.packets) {
+      this.handlePacket(packet);
+    }
+  }
+
+  handlePacket(packet) {
+    if (packet.opcode === OPCODE_PING) {
+      this.send(OPCODE_PONG, packet.payload || {});
+      return;
+    }
+
+    if (packet.opcode === OPCODE_CLOSE) {
+      this.rejectAll(new Error("Discord closed the IPC connection"));
+      return;
+    }
+
+    if (packet.opcode !== OPCODE_FRAME || !packet.payload) return;
+
+    const payload = packet.payload;
+    if (payload.cmd === "DISPATCH" && payload.evt === "READY") {
+      this.readyResolver?.(payload);
+      this.readyResolver = null;
+      this.readyRejecter = null;
+      return;
+    }
+
+    if (payload.cmd === "DISPATCH" && payload.evt === "ERROR") {
+      const error = new Error(payload.data?.message || "Discord IPC error");
+      this.readyRejecter?.(error);
+      this.readyRejecter = null;
+      return;
+    }
+
+    if (!payload.nonce || !this.pending.has(payload.nonce)) return;
+
+    const pending = this.pending.get(payload.nonce);
+    this.pending.delete(payload.nonce);
+
+    if (payload.evt === "ERROR") {
+      pending.reject(new Error(payload.data?.message || "Discord IPC request failed"));
+      return;
+    }
+
+    pending.resolve(payload);
+  }
+
+  rejectAll(error) {
+    this.readyRejecter?.(error);
+    this.readyResolver = null;
+    this.readyRejecter = null;
+
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
 }
 
-function readConfigText() {
-  return fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, "utf-8") : "";
+async function applyConfig(config) {
+  if (!ready || !client) return;
+  await client.setActivity(buildActivity(config));
+  writeStatus({
+    clientId: config.clientId,
+    ready: true,
+    lastAppliedAt: Date.now(),
+    lastError: null,
+  });
+}
+
+async function disconnectCurrentClient() {
+  const previousClient = client;
+  client = null;
+  ready = false;
+  activeClientId = null;
+
+  if (!previousClient) return;
+
+  try {
+    await previousClient.clearActivity();
+  } catch {
+    // Ignore clear failures during reconnect/stop.
+  }
+  try {
+    previousClient.destroy();
+  } catch {
+    // Ignore destroy failures during reconnect/stop.
+  }
+}
+
+async function connect(config) {
+  if (client && activeClientId === config.clientId) {
+    await applyConfig(config);
+    return;
+  }
+
+  await disconnectCurrentClient();
+  activeClientId = config.clientId;
+  writeStatus({ clientId: activeClientId, ready: false, lastError: null });
+
+  client = new DiscordIpcClient();
+  try {
+    await client.connect(config.clientId);
+    ready = true;
+    writeStatus({ clientId: activeClientId, ready: true, lastError: null });
+    await applyConfig(config);
+  } catch (err) {
+    writeStatus({
+      clientId: config.clientId,
+      ready: false,
+      lastError:
+        err && typeof err.message === "string"
+          ? err.message
+          : "Failed to connect to Discord",
+    });
+    process.exit(1);
+  }
 }
 
 function pollConfigChanges() {
@@ -161,55 +558,58 @@ function pollConfigChanges() {
 
     lastConfigText = nextConfigText;
     const nextConfig = JSON.parse(nextConfigText);
-    applyConfig(nextConfig).catch((err) => {
-      console.error("Failed to apply updated config:", err.message);
+    connect(nextConfig).catch((err) => {
+      writeStatus({
+        ready: false,
+        lastError:
+          err && typeof err.message === "string"
+            ? err.message
+            : "Failed to apply updated config",
+      });
     });
   } catch (err) {
-    console.error("Failed to read updated config:", err.message);
+    writeStatus({
+      ready: false,
+      lastError:
+        err && typeof err.message === "string"
+          ? err.message
+          : "Failed to read updated config",
+    });
   }
 }
 
-client.on("ready", () => {
-  ready = true;
-  lastConfigText = readConfigText();
-  applyConfig(initialConfig).catch((err) => {
-    console.error("Failed to set initial Rich Presence:", err.message);
+const initialConfig = readConfig();
+lastConfigText = readConfigText();
+writeStatus({ pid: process.pid, clientId: initialConfig.clientId, ready: false, lastError: null });
+connect(initialConfig).catch((err) => {
+  writeStatus({
+    ready: false,
+    lastError:
+      err && typeof err.message === "string"
+        ? err.message
+        : "Failed to connect to Discord",
   });
-});
-
-client.on("disconnected", () => {
-  process.exit(0);
-});
-
-client.login({ clientId: initialConfig.clientId }).catch((err) => {
-  console.error("Failed to connect to Discord:", err.message);
-  console.error(
-    "Make sure Discord is running and Activity Sharing is enabled in Discord Settings > Activity Privacy."
-  );
   process.exit(1);
 });
 
-// Monitor for stop signal
-const stopInterval = setInterval(() => {
-  try {
-    if (fs.existsSync(STOP_PATH)) {
-      console.log("Stop signal received. Disconnecting...");
-      fs.unlinkSync(STOP_PATH);
-      clearInterval(stopInterval);
-      clearInterval(configInterval);
-      client.destroy().catch(() => {});
-      process.exit(0);
-    }
-  } catch {
-    // File might be deleted between check and unlink
-  }
-}, 2000);
-
-// Poll config changes so Raycast form submissions update live
-// without restarting the bridge process.
 const configInterval = setInterval(pollConfigChanges, 1000);
 
-// Keep process alive
+const stopInterval = setInterval(() => {
+  try {
+    if (!fs.existsSync(STOP_PATH)) return;
+
+    fs.unlinkSync(STOP_PATH);
+    clearInterval(stopInterval);
+    clearInterval(configInterval);
+    disconnectCurrentClient().finally(() => {
+      writeStatus({ ready: false, lastError: "Stopped" });
+      process.exit(0);
+    });
+  } catch {
+    // File might be deleted between check and unlink.
+  }
+}, 1000);
+
 process.stdin.resume();
 `;
 }
@@ -223,21 +623,18 @@ export function writeBridgeConfig(config: RpcConfig): void {
 }
 
 export function spawnBridge(config: RpcConfig): number | null {
-  // Write config to temp file
   writeBridgeConfig(config);
 
-  // Clean up any previous stop signal
-  try {
-    fs.unlinkSync(STOP_SIGNAL_FILE);
-  } catch {
-    // File doesn't exist, that's fine
-  }
+  removeFileIfExists(STOP_SIGNAL_FILE);
+  removeFileIfExists(STATUS_FILE);
 
-  // Generate and write the bridge script
-  const bridgeScript = generateBridgeScript(CONFIG_FILE, STOP_SIGNAL_FILE);
+  const bridgeScript = generateBridgeScript(
+    CONFIG_FILE,
+    STOP_SIGNAL_FILE,
+    STATUS_FILE,
+  );
   fs.writeFileSync(BRIDGE_SCRIPT_FILE, bridgeScript, "utf-8");
 
-  // Spawn the bridge as a detached child process
   const child = spawn(process.execPath, [BRIDGE_SCRIPT_FILE], {
     detached: true,
     stdio: "ignore",
@@ -258,29 +655,107 @@ export function spawnBridge(config: RpcConfig): number | null {
  * Returns true if a stop signal was written, false if no bridge was running.
  */
 export function stopBridge(): boolean {
+  const pid = readBridgePid();
+
   try {
     fs.writeFileSync(STOP_SIGNAL_FILE, Date.now().toString(), "utf-8");
-    return true;
+    return pid !== null;
   } catch {
     return false;
   }
 }
 
+async function stopBridgeAndWait(
+  timeoutMs = BRIDGE_STOP_TIMEOUT_MS,
+): Promise<boolean> {
+  const pid = readBridgePid();
+  const signaled = stopBridge();
+  if (!pid) return signaled;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidRunning(pid)) {
+      removeFileIfExists(PID_FILE);
+      return true;
+    }
+    await wait(BRIDGE_POLL_MS);
+  }
+
+  try {
+    process.kill(pid);
+  } catch {
+    // Already stopped or inaccessible.
+  }
+
+  removeFileIfExists(PID_FILE);
+  removeFileIfExists(STATUS_FILE);
+  return true;
+}
+
 /**
- * Checks if the bridge is currently running by checking for the config file
- * and the absence of a stop signal.
+ * Checks if the bridge process recorded by the PID file is currently running.
  */
 export function isBridgeRunning(): boolean {
   if (fs.existsSync(STOP_SIGNAL_FILE)) return false;
 
-  try {
-    const pid = Number(fs.readFileSync(PID_FILE, "utf-8"));
-    if (!pid) return false;
-    process.kill(pid, 0);
-    return true;
-  } catch {
+  const pid = readBridgePid();
+  if (!pid) {
     return false;
   }
+  if (isPidRunning(pid)) return true;
+
+  removeFileIfExists(PID_FILE);
+  removeFileIfExists(STATUS_FILE);
+  return false;
+}
+
+export async function applyConfigLive(
+  config: RpcConfig,
+): Promise<BridgeApplyResult> {
+  const existingConfig = getCurrentConfig();
+  const requestedAt = Date.now();
+  const running = isBridgeRunning();
+  const needsRestart =
+    running &&
+    Boolean(existingConfig?.clientId) &&
+    existingConfig?.clientId !== config.clientId;
+
+  if (!running && readBridgePid()) {
+    await stopBridgeAndWait();
+  }
+
+  if (needsRestart) {
+    await stopBridgeAndWait();
+  }
+
+  if (running && !needsRestart) {
+    writeBridgeConfig(config);
+    const status = await waitForBridgeReady(config.clientId, requestedAt);
+    return {
+      live: Boolean(status?.ready && status.clientId === config.clientId),
+      started: false,
+      restarted: false,
+      error: status?.lastError ?? undefined,
+    };
+  }
+
+  const pid = spawnBridge(config);
+  if (!pid) {
+    return {
+      live: false,
+      started: false,
+      restarted: needsRestart,
+      error: "Could not start the live Discord RPC bridge.",
+    };
+  }
+
+  const status = await waitForBridgeReady(config.clientId, requestedAt);
+  return {
+    live: Boolean(status?.ready && status.clientId === config.clientId),
+    started: true,
+    restarted: needsRestart,
+    error: status?.lastError ?? undefined,
+  };
 }
 
 /**
