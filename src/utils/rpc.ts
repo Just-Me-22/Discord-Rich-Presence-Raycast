@@ -86,7 +86,7 @@ interface BridgeStatus {
 }
 
 export interface BridgeApplyResult {
-  live: boolean;
+  connected: boolean;
   started: boolean;
   restarted: boolean;
   error?: string;
@@ -709,7 +709,7 @@ export function isBridgeRunning(): boolean {
   return false;
 }
 
-export async function applyConfigLive(
+export async function applyConfigViaBridge(
   config: RpcConfig,
 ): Promise<BridgeApplyResult> {
   const existingConfig = getCurrentConfig();
@@ -732,7 +732,7 @@ export async function applyConfigLive(
     writeBridgeConfig(config);
     const status = await waitForBridgeReady(config.clientId, requestedAt);
     return {
-      live: Boolean(status?.ready && status.clientId === config.clientId),
+      connected: Boolean(status?.ready && status.clientId === config.clientId),
       started: false,
       restarted: false,
       error: status?.lastError ?? undefined,
@@ -742,16 +742,16 @@ export async function applyConfigLive(
   const pid = spawnBridge(config);
   if (!pid) {
     return {
-      live: false,
+      connected: false,
       started: false,
       restarted: needsRestart,
-      error: "Could not start the live Discord RPC bridge.",
+      error: "Could not start the Discord RPC bridge.",
     };
   }
 
   const status = await waitForBridgeReady(config.clientId, requestedAt);
   return {
-    live: Boolean(status?.ready && status.clientId === config.clientId),
+    connected: Boolean(status?.ready && status.clientId === config.clientId),
     started: true,
     restarted: needsRestart,
     error: status?.lastError ?? undefined,

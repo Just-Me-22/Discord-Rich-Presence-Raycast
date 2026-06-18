@@ -3,7 +3,7 @@
 ## [Initial Release] - 2026-06-16
 
 ### Added
-- **Live Presence Updates**: Added a background IPC bridge to push changes to Discord Rich Presence in real-time.
+- **Vencord Settings Sync**: Writes Raycast changes to Vencord CustomRPC settings and restarts Discord when needed so Vencord reloads them.
 - **Vencord Integration**: Added seamless automatic import of `CustomRPC` settings from Vencord (`settings.json`). Supports Stable, PTB, and Canary installations.
 - **Profiles & Presets System**:
   - Automatically save the last used profile for each Application ID.
