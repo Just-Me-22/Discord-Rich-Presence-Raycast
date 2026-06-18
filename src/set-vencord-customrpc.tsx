@@ -10,7 +10,7 @@ import { useMemo, useState } from "react";
 import { restartRunningDiscordClients } from "./utils/discord";
 import {
   ActivityType,
-  applyConfigLive,
+  applyConfigViaBridge,
   deletePreset,
   exportToVencord,
   getAllProfiles,
@@ -317,12 +317,12 @@ export default function Command() {
         return;
       }
 
-      const liveResult = await applyConfigLive(config);
+      const bridgeResult = await applyConfigViaBridge(config);
 
-      if (liveResult.live) {
+      if (bridgeResult.connected) {
         const message = synced
-          ? "Live activity updated. Vencord settings were saved for next launch."
-          : "Live activity updated. Vencord settings file was not found.";
+          ? "Discord activity updated. Vencord settings were saved for next launch."
+          : "Discord activity updated. Vencord settings file was not found.";
         await showToast({
           title: "Discord Rich Presence updated",
           message,
@@ -332,8 +332,8 @@ export default function Command() {
         await showToast({
           title: "Rich Presence saved",
           message:
-            liveResult.error ??
-            "Could not confirm the live Discord RPC bridge is connected.",
+            bridgeResult.error ??
+            "Could not confirm the Discord RPC bridge is connected.",
           style: Toast.Style.Success,
         });
       }
