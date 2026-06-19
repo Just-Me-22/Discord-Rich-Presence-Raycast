@@ -938,18 +938,19 @@ function getVencordSettingsPaths(): string[] {
     process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
   const home = os.homedir();
 
+  // NOTE: only settings.json files. CustomRPC is a Vencord JS plugin, so its
+  // config lives under plugins.CustomRPC in settings.json. The separate
+  // native-settings.json holds C++/native plugin settings and must NOT be
+  // written here — including it would inject a stray CustomRPC block that
+  // Vencord ignores but that confuses anyone reading the file.
   return [
     // Default location (all Discord branches, when DISCORD_USER_DATA_DIR is set)
     path.join(appData, "VencordData", "settings", "settings.json"),
     // Default location (all Discord branches, when derived from userData)
     path.join(appData, "Vencord", "settings", "settings.json"),
-    // Also check native-settings.json in both dirs
-    path.join(appData, "VencordData", "settings", "native-settings.json"),
-    path.join(appData, "Vencord", "settings", "native-settings.json"),
     // Vesktop ships Vencord built-in; its settings live under the
     // Vesktop userData directory rather than the shared Vencord dir.
     path.join(appData, "vesktop", "settings", "settings.json"),
-    path.join(appData, "vesktop", "settings", "native-settings.json"),
     // Some setups use LOCALAPPDATA
     path.join(
       process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"),
@@ -1124,7 +1125,13 @@ function reverseTimestamp(mode: TimestampMode): number {
  */
 export function exportToVencord(config: RpcConfig): boolean {
   const paths = getVencordSettingsPaths();
+  let wroteAny = false;
 
+  // NOTE: write to EVERY settings.json we find. Vesktop ships Vencord
+  // built-in and keeps its own settings.json under AppData/Roaming/vesktop/,
+  // separate from the shared Vencord settings used by Discord Stable/PTB/
+  // Canary. Returning after the first write (the old behavior) left Vesktop's
+  // copy stale, so its Rich Presence never picked up changes on restart.
   for (const settingsPath of paths) {
     let raw: string;
     try {
@@ -1183,13 +1190,13 @@ export function exportToVencord(config: RpcConfig): boolean {
         JSON.stringify(settings, null, 2),
         "utf-8",
       );
-      return true;
+      wroteAny = true;
     } catch {
       continue;
     }
   }
 
-  return false;
+  return wroteAny;
 }
 
 /**
@@ -1209,7 +1216,13 @@ export interface VencordCustomRpcToggleResult {
 export function disableVencordCustomRpc(): VencordCustomRpcToggleResult {
   const paths = getVencordSettingsPaths();
   let foundSettings = false;
+  let foundPlugin = false;
+  let wasEnabledAny = false;
+  let changedAny = false;
 
+  // Write to EVERY settings.json we find (Vesktop keeps its own copy,
+  // separate from the shared Vencord settings used by Discord Stable/PTB/
+  // Canary). See exportToVencord() for the full rationale.
   for (const settingsPath of paths) {
     let raw: string;
     try {
@@ -1232,7 +1245,9 @@ export function disableVencordCustomRpc(): VencordCustomRpcToggleResult {
 
     if (!customRpc) continue;
 
+    foundPlugin = true;
     const wasEnabled = customRpc.enabled !== false;
+    if (wasEnabled) wasEnabledAny = true;
     customRpc.enabled = false;
 
     try {
@@ -1241,12 +1256,7 @@ export function disableVencordCustomRpc(): VencordCustomRpcToggleResult {
         JSON.stringify(settings, null, 2),
         "utf-8",
       );
-      return {
-        foundSettings: true,
-        foundPlugin: true,
-        wasEnabled,
-        changed: wasEnabled,
-      };
+      if (wasEnabled) changedAny = true;
     } catch {
       continue;
     }
@@ -1254,8 +1264,8 @@ export function disableVencordCustomRpc(): VencordCustomRpcToggleResult {
 
   return {
     foundSettings,
-    foundPlugin: false,
-    wasEnabled: false,
-    changed: false,
+    foundPlugin,
+    wasEnabled: wasEnabledAny,
+    changed: changedAny,
   };
 }
