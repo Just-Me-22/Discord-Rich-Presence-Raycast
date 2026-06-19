@@ -6,15 +6,15 @@ Control and customize your Discord Rich Presence directly from Raycast.
 
 ## Features
 
-- **Vencord Integration**: Reads from and writes to your current CustomRPC settings inside Vencord (supports Stable, PTB, and Canary).
-- **Automatic Discord Restart**: Restarts running Discord clients after updating Vencord settings so the cached CustomRPC state is refreshed.
+- **Vencord Integration**: Reads from and writes to your current CustomRPC settings inside Vencord (supports Discord Stable, PTB, Canary, and Vesktop).
+- **Automatic Discord Restart**: Restarts running Discord/Vesktop clients after updating Vencord settings so the cached CustomRPC state is refreshed.
 - **Profiles & Presets**: Keep track of your last-used profiles per Application ID and save reusable configurations to load instantly.
 - **Easy Toggle**: Set your Rich Presence or disable Vencord's CustomRPC plugin from Raycast.
 
 ## Prerequisites
 
-- [Discord](https://discord.com/) must be installed and running locally.
-- [Vencord](https://vencord.dev/) must be installed.
+- [Discord](https://discord.com/) or [Vesktop](https://vencord.dev/vesktop/) must be installed and running locally.
+- [Vencord](https://vencord.dev/) must be installed (built into Vesktop, or installed separately into Discord).
 - The **CustomRPC** plugin must be enabled in your Vencord settings.
 - **Activity Sharing** must be enabled in your Discord settings (`Settings` -> `Activity Privacy` -> `Share your detected activities with others`).
 

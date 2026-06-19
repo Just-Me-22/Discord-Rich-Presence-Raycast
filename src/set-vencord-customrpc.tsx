@@ -6,7 +6,7 @@ import {
   showToast,
   Toast,
 } from "@raycast/api";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { restartRunningDiscordClients } from "./utils/discord";
 import {
   ActivityType,
@@ -28,6 +28,49 @@ import {
 
 interface Preferences {
   defaultAppId?: string;
+}
+
+function getActivityTypeLabel(value: string): string {
+  switch (value) {
+    case String(ActivityType.STREAMING):
+      return "Streaming";
+    case String(ActivityType.LISTENING):
+      return "Listening to";
+    case String(ActivityType.WATCHING):
+      return "Watching";
+    case String(ActivityType.COMPETING):
+      return "Competing in";
+    case String(ActivityType.PLAYING):
+    default:
+      return "Playing";
+  }
+}
+
+function formatTimestampPreview(
+  mode: string,
+  startTimestamp: Date | null,
+  endTimestamp: Date | null,
+): string {
+  switch (mode) {
+    case TimestampMode.NOW:
+      return "Elapsed timer starts when you set the presence";
+    case TimestampMode.TIME:
+      return "Shows elapsed time for the current day";
+    case TimestampMode.CUSTOM:
+      if (startTimestamp && endTimestamp) {
+        return `${startTimestamp.toLocaleString()} to ${endTimestamp.toLocaleString()}`;
+      }
+      if (startTimestamp) {
+        return `Since ${startTimestamp.toLocaleString()}`;
+      }
+      if (endTimestamp) {
+        return `Until ${endTimestamp.toLocaleString()}`;
+      }
+      return "Custom timestamp not set";
+    case TimestampMode.NONE:
+    default:
+      return "No timestamp";
+  }
 }
 
 export default function Command() {
@@ -103,6 +146,7 @@ export default function Command() {
   const [presetName, setPresetName] = useState("");
   const [selectedPreset, setSelectedPreset] = useState("");
   const [presetVersion, setPresetVersion] = useState(0);
+  const [profileVersion, setProfileVersion] = useState(0);
 
   // Validation errors
   const [appIdError, setAppIdError] = useState<string | undefined>();
@@ -127,6 +171,34 @@ export default function Command() {
     if (!/^https?:\/\/(www\.)?(twitch\.tv|youtube\.com)\/\w+/.test(value))
       return "Must be a valid Twitch or YouTube URL";
     return undefined;
+  }
+
+  function clearProfileFields() {
+    setAppName("");
+    setDetails("");
+    setDetailsUrl("");
+    setState("");
+    setStateUrl("");
+    setActivityType(String(ActivityType.PLAYING));
+    setStreamLink("");
+    setTimestampMode(TimestampMode.NONE);
+    setStartTimestamp(null);
+    setEndTimestamp(null);
+    setLargeImageKey("");
+    setLargeImageText("");
+    setLargeImageUrl("");
+    setSmallImageKey("");
+    setSmallImageText("");
+    setSmallImageUrl("");
+    setButtonOneText("");
+    setButtonOneUrl("");
+    setButtonTwoText("");
+    setButtonTwoUrl("");
+    setPartySize("");
+    setPartyMaxSize("");
+    setPresetName("");
+    setAppNameError(undefined);
+    setStreamLinkError(undefined);
   }
 
   /** Populate every form field from a saved RpcConfig. */
@@ -177,6 +249,7 @@ export default function Command() {
       if (vencordConfig) {
         applyProfile(vencordConfig);
         saveProfile(vencordConfig);
+        setProfileVersion((v) => v + 1);
         showToast({
           title: "Imported from Vencord CustomRPC",
           style: Toast.Style.Success,
@@ -196,20 +269,21 @@ export default function Command() {
       }
 
       showToast({
-        title: "No Vencord config found for this app ID",
-        message: "Fill out the form manually — it will be saved for next time.",
+        title: "Started a new saved profile",
+        message: "Fill out the form manually; changes save automatically.",
         style: Toast.Style.Animated,
       });
+      clearProfileFields();
     }
   }
 
-  const savedProfiles = useMemo(() => getAllProfiles(), []);
+  const savedProfiles = useMemo(() => getAllProfiles(), [profileVersion]);
   const appPresets = useMemo(
     () => getPresetsForApp(appId),
     [appId, presetVersion],
   );
 
-  function buildConfig(): RpcConfig {
+  const buildConfig = useCallback((): RpcConfig => {
     const config: RpcConfig = {
       clientId: appId,
       appName,
@@ -263,7 +337,83 @@ export default function Command() {
     }
 
     return config;
-  }
+  }, [
+    appId,
+    appName,
+    details,
+    detailsUrl,
+    state,
+    stateUrl,
+    activityType,
+    streamLink,
+    timestampMode,
+    startTimestamp,
+    endTimestamp,
+    largeImageKey,
+    largeImageText,
+    largeImageUrl,
+    smallImageKey,
+    smallImageText,
+    smallImageUrl,
+    buttonOneText,
+    buttonOneUrl,
+    buttonTwoText,
+    buttonTwoUrl,
+    partySize,
+    partyMaxSize,
+  ]);
+
+  useEffect(() => {
+    if (!/^\d{16,21}$/.test(appId)) return;
+
+    saveProfile(buildConfig());
+    setProfileVersion((v) => v + 1);
+  }, [appId, buildConfig]);
+
+  const presencePreview = useMemo(() => {
+    const image =
+      largeImageKey || largeImageUrl || smallImageKey || smallImageUrl
+        ? [
+            largeImageKey || largeImageUrl
+              ? `Large image: ${largeImageKey || largeImageUrl}`
+              : "Large image: none",
+            smallImageKey || smallImageUrl
+              ? `Small image: ${smallImageKey || smallImageUrl}`
+              : "Small image: none",
+          ].join("\n")
+        : "Images: none";
+    const buttons = [buttonOneText, buttonTwoText].filter(Boolean);
+    const party =
+      partySize && partyMaxSize ? `Party: ${partySize} of ${partyMaxSize}` : "";
+
+    return [
+      `${getActivityTypeLabel(activityType)} ${appName || "Application Name"}`,
+      details || "Details line will appear here",
+      state || "State line will appear here",
+      `Timer: ${formatTimestampPreview(timestampMode, startTimestamp, endTimestamp)}`,
+      image,
+      buttons.length > 0 ? `Buttons: ${buttons.join(" | ")}` : "Buttons: none",
+      party,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }, [
+    activityType,
+    appName,
+    details,
+    state,
+    timestampMode,
+    startTimestamp,
+    endTimestamp,
+    largeImageKey,
+    largeImageUrl,
+    smallImageKey,
+    smallImageUrl,
+    buttonOneText,
+    buttonTwoText,
+    partySize,
+    partyMaxSize,
+  ]);
 
   async function handleSubmit() {
     // Validate required fields
@@ -292,6 +442,7 @@ export default function Command() {
     // Persist this config as a named profile so pasting the
     // app ID later instantly restores all fields.
     saveProfile(config);
+    setProfileVersion((v) => v + 1);
 
     // Also write back to Vencord's settings.json so the
     // CustomRPC plugin stays in sync (picks up on next launch).
@@ -463,6 +614,7 @@ export default function Command() {
         title="Discord Rich Presence"
         text="Configure your custom Rich Presence status. You need a Discord Application ID from the Developer Portal."
       />
+      <Form.Description title="Rich Presence Preview" text={presencePreview} />
 
       {savedProfiles.length > 0 && (
         <Form.Dropdown
@@ -480,7 +632,7 @@ export default function Command() {
             <Form.Dropdown.Item
               key={p.clientId}
               value={p.clientId}
-              title={`${p.appName} (${p.clientId})`}
+              title={`${p.appName || "Unnamed Application"} (${p.clientId})`}
             />
           ))}
         </Form.Dropdown>
@@ -495,7 +647,7 @@ export default function Command() {
         value={appId}
         onChange={handleAppIdChange}
         error={appIdError}
-        info="Paste your app ID to auto-load a saved profile. Get one at discord.com/developers/applications"
+        info="Paste your app ID to auto-load or auto-save a profile. Get one at discord.com/developers/applications"
       />
       <Form.TextField
         id="appName"

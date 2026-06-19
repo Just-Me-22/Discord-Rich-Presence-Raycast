@@ -28,6 +28,11 @@ const discordClients: DiscordClient[] = [
     processName: "DiscordCanary.exe",
     installDir: path.join(localAppData, "DiscordCanary"),
   },
+  {
+    title: "Vesktop",
+    processName: "vesktop.exe",
+    installDir: path.join(localAppData, "vesktop"),
+  },
 ];
 
 function run(command: string, args: string[]): Promise<string> {
@@ -57,16 +62,33 @@ async function isProcessRunning(processName: string): Promise<boolean> {
 
 function startDiscord(client: DiscordClient): boolean {
   const updateExe = path.join(client.installDir, "Update.exe");
-  if (!fs.existsSync(updateExe)) return false;
+  if (fs.existsSync(updateExe)) {
+    const child = spawn(updateExe, ["--processStart", client.processName], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
 
-  const child = spawn(updateExe, ["--processStart", client.processName], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
+    child.unref();
+    return true;
+  }
 
-  child.unref();
-  return true;
+  // Vesktop (and other non-Squirrel clients) ship the executable
+  // directly in their install directory with no Update.exe launcher.
+  const directExe = path.join(client.installDir, client.processName);
+  if (fs.existsSync(directExe)) {
+    const child = spawn(directExe, [], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      cwd: client.installDir,
+    });
+
+    child.unref();
+    return true;
+  }
+
+  return false;
 }
 
 function wait(ms: number) {

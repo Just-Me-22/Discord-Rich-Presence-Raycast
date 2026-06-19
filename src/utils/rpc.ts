@@ -930,8 +930,9 @@ interface VencordSettings {
 }
 
 /** Possible paths where Vencord stores its settings.json on Windows.
- *  Covers Stable, PTB, and Canary — all resolve to the same
- *  %APPDATA%/Vencord (or VencordData) regardless of branch. */
+ *  Covers Stable, PTB, and Canary (Vencord installed into Discord) as
+ *  well as Vesktop (which ships Vencord built-in and stores its
+ *  settings under the Vesktop userData directory). */
 function getVencordSettingsPaths(): string[] {
   const appData =
     process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
@@ -945,6 +946,10 @@ function getVencordSettingsPaths(): string[] {
     // Also check native-settings.json in both dirs
     path.join(appData, "VencordData", "settings", "native-settings.json"),
     path.join(appData, "Vencord", "settings", "native-settings.json"),
+    // Vesktop ships Vencord built-in; its settings live under the
+    // Vesktop userData directory rather than the shared Vencord dir.
+    path.join(appData, "vesktop", "settings", "settings.json"),
+    path.join(appData, "vesktop", "settings", "native-settings.json"),
     // Some setups use LOCALAPPDATA
     path.join(
       process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"),
@@ -1112,7 +1117,7 @@ function reverseTimestamp(mode: TimestampMode): number {
 /**
  * Write a configuration back to Vencord's settings.json so the
  * CustomRPC plugin picks it up next time Discord (Stable, PTB,
- * or Canary) launches.
+ * Canary) or Vesktop launches.
  *
  * This makes Raycast a two-way editor: import from Vencord on
  * paste, edit in Raycast, and the changes land back in Vencord.
